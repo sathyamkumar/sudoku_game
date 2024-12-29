@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sudoku Game</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        .sudoku-board {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            gap: 5px;
+            margin: 20px auto;
+            max-width: 600px;
+        }
+        .cell {
+            width: 60px;
+            height: 60px;
+            text-align: center;
+            font-size: 24px;
+            border: 1px solid #ccc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .cell input {
+            width: 100%;
+            height: 100%;
+            border: 1px solid black;
+            text-align: center;
+            font-size: 24px;
+        }
+        .cell input:focus {
+            outline: none;
+            border: 1px solid #007bff;
+        }
+        .inputError {
+            border: 2px solid red;
+            color: red;
+        }
+        .inputCorrect {
+            border: 2px solid rgb(95, 95, 183);
+            color: rgb(103, 55, 149);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mt-5">Sudoku Game</h1>
+        <div class="text-center" id="roomCredentials">
+            <button id="createRoom" class="btn btn-success">Create Room</button>
+            <input type="text" id="roomCode" placeholder="Enter Room Code" class="form-control mt-2" style="width: 200px; display: inline-block;">
+            <button id="joinRoom" class="btn btn-primary mt-2">Join Room</button>
+        </div>
+        <div id="board" class="sudoku-board mt-4"></div>
+        <div class="text-center mt-3">
+            <button id="submit" class="btn btn-primary">Submit Move</button>
+        </div>
+        <div id="message" class="text-center mt-3"></div>
+        <div id="chances" class="text-center mt-3"></div>
+    </div>
+
+    <script>
+        let socket;
+        let roomName = "";
+        let playerChances = 3;
+
+        document.getElementById('createRoom').addEventListener('click', () => {
+            fetch('http://localhost:4000/api/room/create/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                roomName = data.room_code;
+                showMessage(`Room created: ${roomName}`);
+                connectWebSocket(roomName);
+            })
+            .catch(error => console.error('Error creating room:', error));
+        });
+
+        document.getElementById('joinRoom').addEventListener('click', () => {
+            roomName = document.getElementById('roomCode').value;
+            if (roomName) {
+                connectWebSocket(roomName);
+            } else {
+                showMessage("Please enter a room code.");
+            }
+        });
+
+        function connectWebSocket(room) {
+            socket = new WebSocket(`ws://localhost:4000/ws/game/${room}/`);
+
+            socket.onopen = () => {
+                console.log("Connected to the WebSocket server.");
+            };
+
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log(data);
+
+                if(data.type == 'player_update' && data.count == 2){
+                    document.getElementById('roomCredentials').style.display = 'none';
+                }
+
+                switch (data.type) {
+                    case 'board_update':
+                        updateBoard(data.board);
+                        playerChances = data.chances;
+                        updateChancesDisplay();
+                        break;
+                    case 'move_result':
+                        handleMoveResult(data);
+                        break;
+                    case 'game_over':
+                        handleGameOver(data);
+                        break;
+                    case 'error':
+                        showMessage(data.message);
+                        break;
+                }
+            };
+        }
+
+        let inputObj = {}
+
+        function updateBoard(board) {
+            const boardElement = document.getElementById('board');
+            boardElement.innerHTML = ''; // Clear the board
+
+            board.forEach((row, rowIndex) => {
+                row.forEach((value, colIndex) => {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    if (value !== 0) {
+                        cell.textContent = value; // Display filled values
+                    } else {
+                        const input = document.createElement('input');
+                        input.type = 'number';
+                        input.min = '1';
+                        input.max = '9';
+                        input.dataset.row = rowIndex;
+                        input.dataset.col = colIndex;
+                        inputObj[[rowIndex,colIndex]] = input;
+                        cell.appendChild(input);
+                    }
+                    boardElement.appendChild(cell);
+                });
+            });
+        }
+
+        function handleMoveResult(data) {
+            if (data.success) {
+                let inputCorrect = inputObj[[data.moveData.row,data.moveData.col]];
+                console.log(inputCorrect);
+                inputCorrect.classList.add('inputCorrect');
+                inputCorrect.style.pointerEvent = 'none';
+            } else {
+                let inputError = inputObj[[data.moveData.row,data.moveData.col]];
+                inputError.classList.add('inputError');
+                inputError.value = null;
+            }
+            playerChances = data.chances;
+            updateChancesDisplay();
+        }
+
+        function handleGameOver(data) {
+            if (data.is_winner) {
+                showMessage("Congratulations! You won!");
+            } else {
+                showMessage("Game Over! You lost!");
+            }
+        }
+
+        function showMessage(message) {
+            const messageElement = document.getElementById('message');
+            messageElement.textContent = message;
+        }
+
+        function updateChancesDisplay() {
+            const chancesElement = document.getElementById('chances');
+            chancesElement.textContent = `Chances left: ${playerChances}`;
+        }
+
+        document.getElementById('submit').addEventListener('click', () => {
+            const inputs = document.querySelectorAll('.cell input');
+            inputs.forEach(input => {
+                if (input.value) {
+                    const row = input.dataset.row;
+                    const col = input.dataset.col;
+                    const value = parseInt(input.value);
+                    socket.send(JSON.stringify({
+                        move: {
+                            row: parseInt(row),
+                            col: parseInt(col),
+                            value: value
+                        }
+                    }));
+                }
+            });
+        });
+    </script>
+</body>
+</html>
